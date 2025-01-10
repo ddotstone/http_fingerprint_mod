@@ -43,6 +43,7 @@
 #include "apr_strings.h"
 #include "apr_atomic.h"
 #include "http_protocol.h"
+#include "mod_ssl.h"
 #include "test_char.h"
 #if APR_HAVE_UNISTD_H
 #include <unistd.h>
@@ -82,7 +83,7 @@ static void *merge_forensic_log_scfg(apr_pool_t *p, void *parent, void *new)
 
 static int open_log(server_rec *s, apr_pool_t *p)
 {
-    fcfg *cfg = ap_get_module_config(s->module_config, &log_forensic_module);
+    fcfg *cfg = ap_get_module_config(s->module_config, &log_fingerprint_module);
 
     if (!cfg->logname || cfg->fd)
         return 1;
@@ -200,7 +201,7 @@ static int log_headers(void *h_, const char *key, const char *value)
 static int log_before(request_rec *r)
 {
     fcfg *cfg = ap_get_module_config(r->server->module_config,
-                                     &log_forensic_module);
+                                     &log_fingerprint_module);
     const char *id;
     hlog h;
     apr_size_t n;
@@ -218,7 +219,7 @@ static int log_before(request_rec *r)
         id = apr_psprintf(r->pool, "%" APR_PID_T_FMT ":%lx:%x", getpid(),
                           time(NULL), apr_atomic_inc32(&next_id));
     }
-    ap_set_module_config(r->request_config, &log_forensic_module, (char *)id);
+    ap_set_module_config(r->request_config, &log_fingerprint_module, (char *)id);
 
     h.p = r->pool;
     h.count = 0;
@@ -253,9 +254,9 @@ static int log_before(request_rec *r)
 static int log_after(request_rec *r)
 {
     fcfg *cfg = ap_get_module_config(r->server->module_config,
-                                     &log_forensic_module);
+                                     &log_fingerprint_module);
     const char *id = ap_get_module_config(r->request_config,
-                                          &log_forensic_module);
+                                          &log_fingerprint_module);
     char *s;
     apr_size_t l, n;
     apr_status_t rv;
@@ -276,7 +277,8 @@ static int log_after(request_rec *r)
 static const char *set_forensic_log(cmd_parms *cmd, void *dummy, const char *fn)
 {
     fcfg *cfg = ap_get_module_config(cmd->server->module_config,
-                                     &log_forensic_module);
+                                     &log_fingerprint_module);
+
 
     cfg->logname = fn;
     return NULL;
