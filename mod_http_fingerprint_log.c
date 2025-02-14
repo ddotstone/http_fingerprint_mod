@@ -10,6 +10,7 @@
 #include "http_protocol.h"
 #include "mod_ssl.h"
 #include "http_ssl.h"
+#include "apr_time.h"
 #include "test_char.h"
 #include <stdbool.h>
 #if APR_HAVE_UNISTD_H
@@ -17,6 +18,7 @@
 #endif
 
 #define META_DATA_SPACE 2048
+#define TIMEZONE_OFFSET (-7 * 3600) // UTC-7 (Eastern Standard Time)
 
 module AP_MODULE_DECLARE_DATA http_fingerprint_log_module;
 
@@ -174,7 +176,10 @@ static int log_headers(void *h_, const char *key, const char *value)
 
     /* note that we don't have to check h->pos here, coz its been done
        for us by log_escape */
-    *h->pos++ = '|';
+    *h->pos++ = '\\';
+    *h->pos++ = 'n';
+    *h->pos++ = '\\';
+    *h->pos++ = 'r';
     h->pos = log_escape(h->pos, h->end, key);
     *h->pos++ = ':';
     h->pos = log_escape(h->pos, h->end, value);
@@ -223,6 +228,51 @@ static int log_before(request_rec *r)
     h.pos += strlen(h.pos);
 
     strcpy(h.pos, id);
+    h.pos += strlen(h.pos);
+
+    strcpy(h.pos, "\",\n\"time\":\"");
+    h.pos += strlen(h.pos);
+
+    // Get request timestamp
+    apr_time_t request_time = r->request_time;
+
+    // Get time
+    apr_time_exp_t time_exp;
+    apr_time_exp_gmt(&time_exp, request_time);
+
+    // Apply the timezone offset (handling overflow cases)
+    int total_seconds = time_exp.tm_hour * 3600 + time_exp.tm_min * 60 + time_exp.tm_sec;
+
+    // Adjust hours, minutes, and seconds properly
+    time_exp.tm_hour = (total_seconds / 3600) % 24;
+    time_exp.tm_min = (total_seconds / 60) % 60;
+    time_exp.tm_sec = total_seconds % 60;
+
+    // Adjust for mst
+    time_exp.tm_hour -= 7;
+
+    // Handle negative hour wrap-around (previous day)
+    if (time_exp.tm_hour < 0)
+    {
+        time_exp.tm_hour += 24;
+        time_exp.tm_mday -= 1;
+    }
+
+    // Handle positive overflow (next day)
+    if (time_exp.tm_hour >= 24)
+    {
+        time_exp.tm_hour -= 24;
+        time_exp.tm_mday += 1;
+    }
+
+    // Format the final timestamp string
+    char timestr[128];
+    snprintf(timestr, sizeof(timestr), "%04d-%02d-%02d %02d:%02d:%02d:%06d",
+             time_exp.tm_year + 1900, time_exp.tm_mon + 1, time_exp.tm_mday,
+             time_exp.tm_hour, time_exp.tm_min, time_exp.tm_sec, time_exp.tm_usec);
+    // YYYY-MM-DD HH:MI:SS
+
+    strcpy(h.pos, timestr);
     h.pos += strlen(h.pos);
 
     strcpy(h.pos, "\",\n\"ip\":\"");
@@ -310,27 +360,6 @@ static int log_before(request_rec *r)
     return OK;
 }
 
-static int log_after(request_rec *r)
-{
-    // fingerprint_cfg *cfg = ap_get_module_config(r->server->module_config,
-    //                                             &http_fingerprint_log_module);
-    // char *s;
-    // apr_size_t l, n;
-    // apr_status_t rv;
-
-    // if (!cfg->fd)
-    // {
-    //     return DECLINED;
-    // }
-
-    // s = "-\n\0";
-    // l = n = strlen(s) + 1;
-    // rv = apr_file_write(cfg->fd, s, &n);
-    // ap_assert(rv == APR_SUCCESS);
-
-    return OK;
-}
-
 static const char *set_fingerprint_log(cmd_parms *cmd, void *dummy, const char *fn)
 {
     fingerprint_cfg *cfg = ap_get_module_config(cmd->server->module_config,
@@ -353,7 +382,6 @@ static void register_hooks_fingerprint(apr_pool_t *p)
 
     ap_hook_open_logs(log_init, NULL, NULL, APR_HOOK_MIDDLE);
     ap_hook_post_read_request(log_before, pre, NULL, APR_HOOK_REALLY_FIRST);
-    ap_hook_log_transaction(log_after, NULL, NULL, APR_HOOK_REALLY_LAST);
     return;
 }
 
